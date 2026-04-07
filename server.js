@@ -12,12 +12,12 @@ app.use(express.static('public'));
 // 1. Setup AWS S3 Client
 const s3 = new S3Client({ region: 'us-east-1' });
 
-// 2. Configure Multer to upload directly to S3 (Bug #1 Fixed!)
+// 2. Configure Multer to upload directly to S3
 const upload = multer({
     storage: multerS3({
         s3: s3,
         bucket: process.env.S3_BUCKET_NAME,
-        contentType: multerS3.AUTO_CONTENT_TYPE, // Tells browser to display image, not download it
+        contentType: multerS3.AUTO_CONTENT_TYPE, 
         key: function (req, file, cb) {
             cb(null, 'uploads/' + Date.now().toString() + path.extname(file.originalname));
         }
@@ -33,11 +33,13 @@ const db = mysql.createPool({
     connectionLimit: 10
 });
 
-// 4. Initialize Database & Tables (Bug #2 Fixed: Chained to prevent race conditions!)
+// 4. Initialize Database & Tables (Chained to prevent race conditions)
 db.query('CREATE DATABASE IF NOT EXISTS instaclone_pro;', () => {
     db.query(`CREATE TABLE IF NOT EXISTS instaclone_pro.users (id INT AUTO_INCREMENT PRIMARY KEY, username VARCHAR(50) UNIQUE NOT NULL, password VARCHAR(255) NOT NULL);`, () => {
         db.query(`CREATE TABLE IF NOT EXISTS instaclone_pro.posts (id INT AUTO_INCREMENT PRIMARY KEY, user_id INT, username VARCHAR(50), image_url VARCHAR(500) NOT NULL, caption TEXT, likes INT DEFAULT 0, FOREIGN KEY (user_id) REFERENCES instaclone_pro.users(id));`, () => {
-            db.query(`CREATE TABLE IF NOT EXISTS instaclone_pro.comments (id INT AUTO_INCREMENT PRIMARY KEY, post_id INT, username VARCHAR(50), text TEXT, FOREIGN KEY (post_id) REFERENCES instaclone_pro.posts(id) ON DELETE CASCADE);`);
+            db.query(`CREATE TABLE IF NOT EXISTS instaclone_pro.comments (id INT AUTO_INCREMENT PRIMARY KEY, post_id INT, username VARCHAR(50), text TEXT, FOREIGN KEY (post_id) REFERENCES instaclone_pro.posts(id) ON DELETE CASCADE);`, () => {
+                db.query(`CREATE TABLE IF NOT EXISTS instaclone_pro.likes (id INT AUTO_INCREMENT PRIMARY KEY, post_id INT, user_id INT, UNIQUE(post_id, user_id), FOREIGN KEY (post_id) REFERENCES instaclone_pro.posts(id) ON DELETE CASCADE, FOREIGN KEY (user_id) REFERENCES instaclone_pro.users(id) ON DELETE CASCADE);`);
+            });
         });
     });
 });
@@ -84,8 +86,7 @@ app.post('/api/posts', upload.single('image'), (req, res) => {
     const { userId, username, caption } = req.body;
     if (!req.file) return res.status(400).json({ error: "Image required" });
     
-    // multer-s3 automatically gives us the public AWS S3 URL!
-    const image_url = req.file.location; 
+    const image_url = req.file.location; // S3 Public URL
 
     db.query('INSERT INTO instaclone_pro.posts (user_id, username, image_url, caption) VALUES (?, ?, ?, ?)', [userId, username, image_url, caption], (err, result) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -96,18 +97,35 @@ app.post('/api/posts', upload.single('image'), (req, res) => {
 // Feed API: Delete Post
 app.delete('/api/posts/:id', (req, res) => {
     const { userId } = req.body;
-    // Ensure the person deleting is the owner of the post
     db.query('DELETE FROM instaclone_pro.posts WHERE id = ? AND user_id = ?', [req.params.id, userId], (err) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ success: true });
     });
 });
 
-// Feed API: Like Post
+// Feed API: Toggle Like Post
 app.post('/api/posts/:id/like', (req, res) => {
-    db.query('UPDATE instaclone_pro.posts SET likes = likes + 1 WHERE id = ?', [req.params.id], (err) => {
+    const { userId } = req.body;
+    const postId = req.params.id;
+
+    db.query('SELECT * FROM instaclone_pro.likes WHERE post_id = ? AND user_id = ?', [postId, userId], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
+
+        if (results.length > 0) {
+            // Unlike
+            db.query('DELETE FROM instaclone_pro.likes WHERE post_id = ? AND user_id = ?', [postId, userId], () => {
+                db.query('UPDATE instaclone_pro.posts SET likes = likes - 1 WHERE id = ?', [postId], () => {
+                    res.json({ success: true, action: 'unliked' });
+                });
+            });
+        } else {
+            // Like
+            db.query('INSERT INTO instaclone_pro.likes (post_id, user_id) VALUES (?, ?)', [postId, userId], () => {
+                db.query('UPDATE instaclone_pro.posts SET likes = likes + 1 WHERE id = ?', [postId], () => {
+                    res.json({ success: true, action: 'liked' });
+                });
+            });
+        }
     });
 });
 

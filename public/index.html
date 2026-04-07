@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Insta-Clone Pro</title>
     <style>
-        :root { --primary: #0095f6; --bg: #fafafa; --border: #dbdbdb; --text: #262626; }
+        :root { --primary: #0095f6; --bg: #fafafa; --border: #dbdbdb; --text: #262626; --danger: #ed4956; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 0; }
         .navbar { background: white; border-bottom: 1px solid var(--border); padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
         .navbar h1 { margin: 0; font-family: cursive; font-size: 24px; }
@@ -14,15 +14,22 @@
         input { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 4px; box-sizing: border-box; background: #fafafa; }
         button { background: var(--primary); color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%; transition: background 0.2s; }
         button:hover { background: #0077c2; }
+        .btn-delete { background: transparent; color: var(--danger); width: auto; padding: 0; font-size: 14px; }
+        .btn-delete:hover { background: transparent; text-decoration: underline; }
         .switch-auth { text-align: center; margin-top: 15px; font-size: 14px; }
-        .switch-auth a { color: var(--primary); cursor: pointer; text-decoration: none; font-weight: bold; }
+        .switch-auth a { color: var(--primary); cursor: pointer; font-weight: bold; }
         
-        /* Post Styles */
         .post { background: white; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 20px; overflow: hidden; }
-        .post-header { padding: 12px 15px; font-weight: bold; border-bottom: 1px solid #efefef; }
-        .post img { width: 100%; height: auto; display: block; }
+        .post-header { padding: 12px 15px; font-weight: bold; border-bottom: 1px solid #efefef; display: flex; justify-content: space-between;}
+        .post img { width: 100%; height: auto; display: block; background: #efefef; }
         .post-footer { padding: 15px; }
+        .action-bar { margin-bottom: 10px; font-size: 24px; cursor: pointer;}
         .caption { margin-top: 8px; font-size: 14px; }
+        .comments-section { margin-top: 10px; font-size: 14px; color: #555; }
+        .comment { margin-bottom: 4px; }
+        .add-comment-box { display: flex; margin-top: 10px; border-top: 1px solid #efefef; padding-top: 10px;}
+        .add-comment-box input { border: none; background: transparent; margin: 0; padding: 5px 0; }
+        .add-comment-box button { width: auto; background: transparent; color: var(--primary); padding: 0 10px; }
         
         .hidden { display: none !important; }
     </style>
@@ -49,7 +56,7 @@
         <div id="appSection" class="hidden">
             <div class="card">
                 <h3>Create a Post</h3>
-                <input type="text" id="imgUrl" placeholder="Paste an Image URL...">
+                <input type="file" id="imageFile" accept="image/*" style="background: white; border: none; padding: 0;">
                 <input type="text" id="caption" placeholder="Write a caption...">
                 <button onclick="createPost()">Share Post</button>
             </div>
@@ -87,8 +94,7 @@
             const p = document.getElementById('password').value;
             if (!u || !p) return alert("Fill in all fields");
 
-            const endpoint = isLogin ? '/api/login' : '/api/signup';
-            const res = await fetch(endpoint, {
+            const res = await fetch(isLogin ? '/api/login' : '/api/signup', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username: u, password: p })
@@ -112,22 +118,6 @@
             checkAuth();
         }
 
-        async function createPost() {
-            const img = document.getElementById('imgUrl').value;
-            const cap = document.getElementById('caption').value;
-            if(!img) return alert("Image URL required");
-
-            await fetch('/api/posts', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: currentUser.id, username: currentUser.username, image_url: img, caption: cap })
-            });
-            
-            document.getElementById('imgUrl').value = '';
-            document.getElementById('caption').value = '';
-            loadFeed();
-        }
-
         async function loadFeed() {
             const res = await fetch('/api/posts');
             const posts = await res.json();
@@ -135,19 +125,82 @@
             feed.innerHTML = '';
 
             posts.forEach(post => {
+                // Check if current user owns the post to show delete button
+                const deleteBtn = (post.user_id === currentUser.id) 
+                    ? `<button class="btn-delete" onclick="deletePost(${post.id})">Delete</button>` : '';
+
+                // Generate Comments HTML
+                const commentsHtml = post.comments.map(c => `<div class="comment"><b>${c.username}</b> ${c.text}</div>`).join('');
+
                 feed.innerHTML += `
                     <div class="post">
-                        <div class="post-header">@${post.username}</div>
-                        <img src="${post.image_url}" onerror="this.src='https://via.placeholder.com/500x500?text=Invalid+Image'">
+                        <div class="post-header">
+                            <span>@${post.username}</span>
+                            ${deleteBtn}
+                        </div>
+                        <img src="${post.image_url}" alt="Post Image">
                         <div class="post-footer">
+                            <div class="action-bar" onclick="likePost(${post.id})">❤️ <span style="font-size:16px;">${post.likes} likes</span></div>
                             <div class="caption"><b>${post.username}</b> ${post.caption}</div>
+                            
+                            <div class="comments-section">${commentsHtml}</div>
+                            
+                            <div class="add-comment-box">
+                                <input type="text" id="comment-input-${post.id}" placeholder="Add a comment...">
+                                <button onclick="addComment(${post.id})">Post</button>
+                            </div>
                         </div>
                     </div>
                 `;
             });
         }
 
-        // Initialize App
+        async function createPost() {
+            const fileInput = document.getElementById('imageFile');
+            const cap = document.getElementById('caption').value;
+            
+            if(fileInput.files.length === 0) return alert("Please select an image!");
+
+            // Use FormData to send the file to the server
+            const formData = new FormData();
+            formData.append('image', fileInput.files[0]);
+            formData.append('caption', cap);
+            formData.append('userId', currentUser.id);
+            formData.append('username', currentUser.username);
+
+            await fetch('/api/posts', { method: 'POST', body: formData });
+            
+            fileInput.value = '';
+            document.getElementById('caption').value = '';
+            loadFeed();
+        }
+
+        async function deletePost(id) {
+            if(!confirm("Delete this post?")) return;
+            await fetch(`/api/posts/${id}`, { 
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: currentUser.id })
+            });
+            loadFeed();
+        }
+
+        async function likePost(id) {
+            await fetch(`/api/posts/${id}/like`, { method: 'POST' });
+            loadFeed();
+        }
+
+        async function addComment(id) {
+            const text = document.getElementById(`comment-input-${id}`).value;
+            if(!text) return;
+            await fetch(`/api/posts/${id}/comment`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: currentUser.username, text: text })
+            });
+            loadFeed();
+        }
+
         checkAuth();
     </script>
 </body>
